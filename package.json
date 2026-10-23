@@ -1,0 +1,32 @@
+{
+  "name": "image-editor",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "npm run wasm && vite --host 127.0.0.1",
+    "wasm": "asc assembly/core.ts --outFile public/core.wasm --optimize --runtime incremental --exportRuntime && node scripts/copy-runtime.mjs",
+    "check": "tsc --noEmit",
+    "build": "npm run wasm && npm run check && vite build",
+    "test": "npm run wasm && tsx --test tests/*.test.ts",
+    "test:browser": "node tests/browser.mjs",
+    "test:model": "node tests/model.mjs",
+    "test:performance": "node tests/performance.mjs",
+    "test:integration": "node tests/integration.mjs",
+    "preview": "vite preview --host 127.0.0.1"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "3.8.1"
+  },
+  "overrides": {
+    "sharp": "0.35.5"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.0",
+    "assemblyscript": "0.28.20",
+    "playwright-core": "^1.56.1",
+    "tsx": "4.20.6",
+    "typescript": "5.9.3",
+    "vite": "8.3.5"
+  }
+}

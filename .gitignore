@@ -1,0 +1,41 @@
+# Dependencies and caches
+node_modules/
+/.npm-cache/
+/.cache/
+/.vite/
+
+# Build outputs and generated runtime assets
+/dist/
+/public/core.wasm
+/public/core.js
+/public/core.d.ts
+/public/ort/
+*.tsbuildinfo
+
+# Local reference documents
+/local-docs/
+
+# Local environment configuration (keep shareable examples)
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.local
+
+# Logs and test reports
+*.log
+/coverage/
+/playwright-report/
+/test-results/
+
+# Personal editor settings and temporary files
+/.idea/
+/.vscode/
+*.swp
+*.swo
+*~
+
+# Operating system metadata
+.DS_Store
+Thumbs.db
+Desktop.ini
