@@ -140,8 +140,9 @@ class Editor {
     this.button('apply').hidden = !this.task; this.button('apply').disabled = !!this.busy || !!this.gesture;
     this.button('cancel').hidden = !this.task;
     this.get('task-actions').hidden = !this.task;
-    this.button('undo').disabled = blocked || !this.history.past.length;
-    this.button('redo').disabled = blocked || !this.history.future.length;
+    const historyBlocked = this.fileBusy || !this.ready || this.busy || !!this.gesture;
+    this.button('undo').disabled = historyBlocked || (!this.task && !this.history.past.length);
+    this.button('redo').disabled = historyBlocked || !!this.task || !this.history.future.length;
     for (const name of ['new', 'size', 'import']) this.button(name).disabled = blocked;
     this.button('export').disabled = blocked || this.exporting || !this.doc.layers.length;
     for (const name of ['all', 'inverse', 'deselect', 'duplicate', 'delete', 'flip-x', 'flip-y', 'mask-selection']) this.button(name).disabled = blocked || !l;
@@ -314,15 +315,21 @@ class Editor {
     if (action === 'model-disable') { this.disableModel(); return; }
     if (action === 'model-clear') { void this.clearModel(); return; }
     if (action === 'refine') { void this.refine(); return; }
+    if (action === 'undo' || action === 'redo') {
+      if (!this.ready || this.fileBusy || this.busy || this.gesture) return;
+      // Save a completed preview before undoing it so redo can restore the edit.
+      if (this.task) {
+        if (action !== 'undo' || this.busy || this.gesture) return;
+        this.apply();
+      }
+      const doc = action === 'undo' ? this.history.undo(this.doc) : this.history.redo(this.doc);
+      if (doc) { this.doc = doc; this.version++; this.request++; this.refresh(); this.scheduleSave(); } return;
+    }
     if (this.task) return;
     if (action === 'merge-down' || action === 'merge-visible') { void this.mergeLayers(action === 'merge-down' ? 'down' : 'visible'); return; }
     if (action === 'import') { this.get<HTMLInputElement>('files').click(); return; }
     if (action === 'new' || action === 'size') { this.sizeDialog(action === 'new'); return; }
     if (action === 'export') { this.exportDialog(); return; }
-    if (action === 'undo' || action === 'redo') {
-      const doc = action === 'undo' ? this.history.undo(this.doc) : this.history.redo(this.doc);
-      if (doc) { this.doc = doc; this.version++; this.request++; this.refresh(); this.scheduleSave(); } return;
-    }
     if (!l) return;
     if (['copy', 'cut'].includes(action) && !l.selection?.some(Boolean)) return;
     this.changed(action, () => {
@@ -434,7 +441,7 @@ class Editor {
     });
   }
   private keyDown(e: KeyboardEvent): void {
-    if ((e.target as HTMLElement).closest('input,select,textarea,dialog') || !this.ready || this.merging) return;
+    if (e.isComposing || e.altKey || (e.target as HTMLElement).closest('input,select,textarea,dialog,[contenteditable]:not([contenteditable="false"])') || !this.ready || this.fileBusy) return;
     const key = e.key.toLowerCase(), mod = e.ctrlKey || e.metaKey;
     if (e.code === 'Space') { e.preventDefault(); this.space = true; this.updateBrushCursor(); return; }
     if (key === 'escape') { e.preventDefault(); this.cancel(); return; }

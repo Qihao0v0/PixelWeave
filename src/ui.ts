@@ -4,7 +4,7 @@ export const template = `
   <header class="ie-header">
     <button data-action="new">新建</button><button data-action="import">导入</button>
     <input data-el="files" type="file" accept="image/*" multiple hidden>
-    <button data-action="undo" title="撤销 (Ctrl+Z)">撤销</button><button data-action="redo" title="重做 (Ctrl+Shift+Z)">重做</button>
+    <button data-action="undo" title="撤销 (Ctrl+Z / ⌘Z)" aria-keyshortcuts="Control+Z Meta+Z">撤销</button><button data-action="redo" title="重做 (Ctrl+Shift+Z / Ctrl+Y / ⌘⇧Z)" aria-keyshortcuts="Control+Shift+Z Control+Y Meta+Shift+Z">重做</button>
     <button data-action="size">画布尺寸</button><button data-action="export">导出</button>
     <span data-el="status" role="status" aria-live="polite"></span>
     <button data-action="dismiss" hidden>关闭提示</button>

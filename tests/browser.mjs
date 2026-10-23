@@ -78,6 +78,43 @@ async function assertSameImage(page, before, after) {
   assert.equal(result.equalSize, true); assert.ok(result.maxError <= 2, `Merging changed the rendered image by ${result.maxError}`);
 }
 try {
+  const historySession = await setup({ width: 1280, height: 800 });
+  const h = historySession.page;
+  assert.equal(await h.locator('[data-action=undo]').isDisabled(), true);
+  assert.equal(await h.locator('[data-action=redo]').isDisabled(), true);
+  await importImage(h);
+  await h.locator('[data-el=canvas]').focus();
+  await h.keyboard.press('Control+z');
+  await waitSaved(h, d => d?.layers.length === 0);
+  await h.keyboard.press('Control+y');
+  await waitSaved(h, d => d?.layers.length === 1);
+  await h.locator('[data-tool=rect]').click();
+  await drag(h, await imagePoint(h, 10, 10), await imagePoint(h, 50, 50));
+  assert.equal(await h.locator('[data-action=apply]').isVisible(), true);
+  assert.equal(await h.locator('[data-action=undo]').isEnabled(), true);
+  await h.keyboard.press('Control+z');
+  await waitSaved(h, d => d?.layers.length === 1 && d.layers[0].selection === null);
+  assert.equal(await h.locator('[data-action=apply]').isVisible(), false);
+  await h.keyboard.press('Control+Shift+z');
+  await waitSaved(h, d => d?.layers[0].selection?.[20 * 120 + 20] === 255);
+  await h.keyboard.press('Meta+z');
+  await waitSaved(h, d => d?.layers[0].selection === null);
+  await h.keyboard.press('Meta+Shift+z');
+  await waitSaved(h, d => d?.layers[0].selection?.[20 * 120 + 20] === 255);
+  const nameInput = h.locator('[data-name]').first();
+  await nameInput.focus();
+  assert.equal(await nameInput.evaluate(el => {
+    const event = new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true, cancelable: true });
+    el.dispatchEvent(event); return event.defaultPrevented;
+  }), false, 'Text inputs must retain native undo');
+  await h.locator('[data-el=canvas]').focus();
+  await h.keyboard.press('Control+z');
+  await waitSaved(h, d => d?.layers[0].selection === null);
+  await h.keyboard.press('ArrowRight');
+  await waitSaved(h, d => d?.layers[0].transform.x === 1);
+  assert.equal(await h.locator('[data-action=redo]').isDisabled(), true, 'New edits must clear redo');
+  await historySession.context.close();
+  results.push('history: empty state, import undo/redo, pending selection undo/redo, Ctrl/Meta shortcuts, native text undo, redo invalidation');
   const { context, page } = await setup({ width: 1280, height: 800 });
   await importImage(page);
   await page.locator('[data-tool=color]').click();
