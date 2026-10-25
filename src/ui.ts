@@ -5,12 +5,13 @@ export const template = `
     <button data-action="new">新建</button><button data-action="import">导入</button>
     <input data-el="files" type="file" accept="image/*" multiple hidden>
     <button data-action="undo" title="撤销 (Ctrl+Z / ⌘Z)" aria-keyshortcuts="Control+Z Meta+Z">撤销</button><button data-action="redo" title="重做 (Ctrl+Shift+Z / Ctrl+Y / ⌘⇧Z)" aria-keyshortcuts="Control+Shift+Z Control+Y Meta+Shift+Z">重做</button>
-    <button data-action="size">画布尺寸</button><button data-action="export">导出</button>
+    <button data-action="size">画布尺寸</button><button data-action="trim" title="自动裁去所有可见图层合成后的全透明边界">去除透明边界</button><button data-action="export">导出</button>
     <span data-el="status" role="status" aria-live="polite"></span>
     <button data-action="dismiss" hidden>关闭提示</button>
   </header>
   <nav class="ie-tools" aria-label="工具">${tools.map(([id, name, key]) => `<button data-tool="${id}" title="${name} (${key})" aria-pressed="false">${name}</button>`).join('')}</nav>
   <section class="ie-options" aria-label="工具参数">
+    <label data-for="bucket">填充颜色 <input data-option="fill-color" type="color" value="#000000"></label>
     <label data-for="selection">模式 <select data-option="mode"><option value="replace">新建</option><option value="add">增选</option><option value="subtract">减选</option><option value="intersect">交集</option></select></label>
     <label data-for="radius">笔径 <input data-option="radius" type="range" min="1" max="200" value="24"><output data-value="radius">24</output></label>
     <label data-for="tolerance">容差 <input data-option="tolerance" type="range" min="0" max="255" value="32"><output data-value="tolerance">32</output></label>

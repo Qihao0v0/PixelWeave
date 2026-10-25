@@ -3,6 +3,7 @@ import { canvas, Renderer } from './render';
 import { emptyDocument, History, mergeTargets, newLayer, replaceMergedLayers, selectionToLayer, snapshot, type MergeMode } from './document';
 import { combineMasks, localToWorld, polygonMask, stroke, worldToLocal } from './geometry';
 import { Storage } from './storage';
+import type { FillInput } from './pixels';
 import { tools, type AlgorithmInput, type AlgorithmOutput, type Asset, type Combine, type DocumentState, type Layer, type Point, type Tool, type Transform, type View } from './types';
 
 interface Task { before: DocumentState; tool: Tool; seed?: Point; modeOverride?: Combine; base?: Uint8Array | null; candidate?: Uint8Array; points: Point[]; labels: number[]; crop?: { x: number; y: number; width: number; height: number } }
@@ -47,7 +48,8 @@ class Editor {
   private get busy(): boolean { return !!this.colorTimer || this.operations.has(this.request); }
   private importing = false;
   private merging = false;
-  private get fileBusy(): boolean { return this.importing || this.merging; }
+  private filling = false;
+  private get fileBusy(): boolean { return this.importing || this.merging || this.filling; }
   private exporting = false;
   private destroyed = false;
   private ready = false;
@@ -128,7 +130,7 @@ class Editor {
     this.stage.dataset.currentTool = this.tool;
     const selection = ['quick', 'color', 'wand', 'brush', 'rect', 'lasso', 'model'].includes(this.tool);
     const fields: Record<string, boolean> = {
-      selection, radius: ['quick', 'brush', 'mask', 'refine'].includes(this.tool), tolerance: ['color', 'wand'].includes(this.tool),
+      selection, radius: ['quick', 'brush', 'mask', 'refine'].includes(this.tool), tolerance: ['color', 'wand', 'bucket'].includes(this.tool), bucket: this.tool === 'bucket',
       paint: ['mask', 'refine', 'model'].includes(this.tool), refine: this.tool === 'refine', move: this.tool === 'move',
       magnify: ['quick', 'brush', 'mask', 'refine'].includes(this.tool), model: this.tool === 'model',
     };
@@ -144,6 +146,7 @@ class Editor {
     this.button('undo').disabled = historyBlocked || (!this.task && !this.history.past.length);
     this.button('redo').disabled = historyBlocked || !!this.task || !this.history.future.length;
     for (const name of ['new', 'size', 'import']) this.button(name).disabled = blocked;
+    this.button('trim').disabled = blocked || !!this.gesture || !this.doc.layers.length;
     this.button('export').disabled = blocked || this.exporting || !this.doc.layers.length;
     for (const name of ['all', 'inverse', 'deselect', 'duplicate', 'delete', 'flip-x', 'flip-y', 'mask-selection']) this.button(name).disabled = blocked || !l;
     for (const name of ['copy', 'cut', 'mask-from']) this.button(name).disabled = blocked || !hasSelection;
@@ -326,6 +329,7 @@ class Editor {
       if (doc) { this.doc = doc; this.version++; this.request++; this.refresh(); this.scheduleSave(); } return;
     }
     if (this.task) return;
+    if (action === 'trim') { this.trimCanvas(); return; }
     if (action === 'merge-down' || action === 'merge-visible') { void this.mergeLayers(action === 'merge-down' ? 'down' : 'visible'); return; }
     if (action === 'import') { this.get<HTMLInputElement>('files').click(); return; }
     if (action === 'new' || action === 'size') { this.sizeDialog(action === 'new'); return; }
@@ -395,6 +399,54 @@ class Editor {
       replaceMergedLayers(this.doc, sources, merged); this.version++; this.request++; this.message(); this.scheduleSave();
     } catch (error) { this.fail(error); }
     finally { this.merging = false; this.refresh(); }
+  }
+  private trimCanvas(): void {
+    if (!this.ready || this.fileBusy || this.task || this.gesture) return;
+    try {
+      const bounds = this.renderer.transparentBounds(this.doc);
+      if (!bounds) { this.message('画布完全透明，无需裁切'); return; }
+      if (bounds.width === this.doc.width && bounds.height === this.doc.height) { this.message('没有可去除的透明边界'); return; }
+      this.changed('去除透明边界', () => {
+        this.doc.width = bounds.width; this.doc.height = bounds.height; this.doc.autoSize = false;
+        for (const layer of this.doc.layers) { layer.transform.x -= bounds.x; layer.transform.y -= bounds.y; }
+      });
+      this.fit(); this.message(`画布已缩小至 ${bounds.width} × ${bounds.height}`);
+    } catch (error) { this.fail(error); }
+  }
+  private async fillAt(world: Point): Promise<void> {
+    if (!this.ready || this.fileBusy || this.task) return;
+    if (world.x < 0 || world.y < 0 || world.x >= this.doc.width || world.y >= this.doc.height) return;
+    const layer = this.layer(), point = layer ? worldToLocal(world, layer.transform) : world;
+    if (layer && (!layer.visible || layer.opacity === 0)) { this.message('请先显示当前图层'); return; }
+    const width = layer?.width ?? this.doc.width, height = layer?.height ?? this.doc.height;
+    if (point.x < 0 || point.y < 0 || point.x >= width || point.y >= height) return;
+    const before = snapshot(this.doc), version = this.version, hex = this.option('fill-color').value;
+    this.filling = true; this.refresh(); this.message('填充中…');
+    let image: HTMLCanvasElement | null = null;
+    try {
+      this.worker ??= this.connect(new Worker(new URL('./algorithm.worker.ts', import.meta.url), { type: 'module' }));
+      const result = await this.send<{ pixels: Uint8ClampedArray; changed: boolean }>(this.worker, {
+        input: { kind: 'fill', width, height, pixels: layer ? this.pixels(layer) : new Uint8ClampedArray(width * height * 4),
+          x: point.x, y: point.y, color: [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16)),
+          tolerance: Number(this.option('tolerance').value), selection: layer?.selection ?? null,
+          mask: layer?.maskEnabled ? layer.mask : null } satisfies FillInput,
+      });
+      if (this.destroyed || this.version !== version) return;
+      if (!result.changed) { this.message('没有需要填充的像素'); return; }
+      image = canvas(width, height);
+      const ctx = image.getContext('2d')!, data = ctx.createImageData(width, height);
+      data.data.set(result.pixels); ctx.putImageData(data, 0, 0);
+      const blob = await new Promise<Blob>((resolve, reject) => image!.toBlob(value => value ? resolve(value) : reject(new Error('填充结果保存失败')), 'image/png'));
+      const bitmap = await createImageBitmap(blob);
+      if (this.destroyed || this.version !== version) { bitmap.close(); return; }
+      const id = crypto.randomUUID();
+      this.assets.set(id, { id, blob, bitmap, pixels: result.pixels });
+      this.history.push(before, '油漆桶填充');
+      if (layer) { layer.asset = id; this.renderer.invalidate(layer.id); }
+      else { const next = newLayer(id, '填充图层', width, height); this.doc.layers.push(next); this.doc.active = next.id; this.doc.autoSize = false; }
+      this.version++; this.request++; this.message(); this.scheduleSave();
+    } catch (error) { if (!this.destroyed) this.fail(error); }
+    finally { if (image) image.width = 0; this.filling = false; this.refresh(); }
   }
   private input(event: Event): void {
     const target = event.target as HTMLInputElement, key = target.dataset.option;
@@ -467,7 +519,7 @@ class Editor {
     }
     if (this.pointers.size > 1) return;
     let l = this.layer(); const world = this.world(screen), pan = this.tool === 'pan' || this.space || e.button === 1;
-    if (!pan && this.tool !== 'crop' && !l) { this.pointers.delete(e.pointerId); return; }
+    if (!pan && this.tool !== 'crop' && this.tool !== 'bucket' && !l) { this.pointers.delete(e.pointerId); return; }
     if (!pan && this.tool === 'model' && !this.modelReady) { this.message('请先启用模型'); this.pointers.delete(e.pointerId); return; }
     let handle = -1;
     if (!pan && this.tool === 'move') {
@@ -481,12 +533,13 @@ class Editor {
         this.doc.active = hit.id; l = hit;
       }
     }
-    const createdTask = !pan && !this.task;
-    if (!pan) this.startTask();
+    const createdTask = !pan && this.tool !== 'bucket' && !this.task;
+    if (!pan && this.tool !== 'bucket') this.startTask();
     const mode: Combine = e.altKey ? 'subtract' : e.shiftKey ? 'add' : this.option('mode').value as Combine;
     this.gesture = { start: world, screen, last: world, points: l ? [worldToLocal(world, l.transform)] : [world], transform: l ? { ...l.transform } : undefined,
       handle, initialSelection: l?.selection, initialMask: l?.mask, initialMaskEnabled: l?.maskEnabled, initialConstraints: l?.constraints, createdTask, mode, pan, lastCompute: 0 };
     if (pan) { this.updateBrushCursor(); return; }
+    if (this.tool === 'bucket') { this.refresh(); return; }
     if (this.tool === 'color' || this.tool === 'wand') {
       if (this.colorTimer) clearTimeout(this.colorTimer); this.colorTimer = null;
       return;
@@ -516,6 +569,7 @@ class Editor {
     const g = this.gesture; if (!g) return;
     const world = this.world(screen);
     if (g.pan) { this.view.x += screen.x - g.screen.x; this.view.y += screen.y - g.screen.y; g.screen = screen; this.draw(); return; }
+    if (this.tool === 'bucket') return;
     const l = this.layer();
     if (l) {
       const p = worldToLocal(world, g.transform!);
@@ -587,6 +641,7 @@ class Editor {
     const g = this.gesture; this.gesture = null; this.get('magnifier').hidden = true;
     if (!g) { this.refresh(); return; }
     if (g.pan) { this.scheduleSave(); this.refresh(); return; }
+    if (this.tool === 'bucket') { void this.fillAt(g.start); this.refresh(); return; }
     const l = this.layer();
     if (l && this.task && (this.tool === 'color' || this.tool === 'wand')) { this.task.seed = g.points[g.points.length - 1]; this.task.modeOverride = g.mode; void this.colorSelection(); }
     if (l && this.task && this.tool === 'model') {

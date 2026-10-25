@@ -1,5 +1,6 @@
 import type { Asset, DocumentState, Layer, Point, View } from './types';
 import { localToWorld, worldToLocal } from './geometry';
+import { alphaBounds } from './pixels';
 export function canvas(w: number, h: number): HTMLCanvasElement {
   const c = document.createElement('canvas'); c.width = w; c.height = h;
   if (!c.getContext('2d')) throw new Error('浏览器无法创建画布'); return c;
@@ -109,6 +110,22 @@ export class Renderer {
     this.compose(ctx, doc, true);
     try { return await new Promise<Blob>((resolve, reject) => c.toBlob(blob => blob ? resolve(blob) : reject(new Error('图片导出失败，可能超出设备画布限制')), type, quality)); }
     finally { c.width = 0; }
+  }
+  transparentBounds(doc: DocumentState): ReturnType<typeof alphaBounds> {
+    const c = canvas(doc.width, doc.height);
+    try {
+      const ctx = c.getContext('2d')!; this.compose(ctx, doc, true);
+      let left = doc.width, top = doc.height, right = 0, bottom = 0;
+      // Read strips to avoid allocating another full-resolution RGBA buffer.
+      for (let y = 0; y < doc.height; y += 128) {
+        const height = Math.min(128, doc.height - y);
+        const bounds = alphaBounds(ctx.getImageData(0, y, doc.width, height).data, doc.width, height);
+        if (!bounds) continue;
+        left = Math.min(left, bounds.x); top = Math.min(top, y + bounds.y);
+        right = Math.max(right, bounds.x + bounds.width); bottom = Math.max(bottom, y + bounds.y + bounds.height);
+      }
+      return right > left && bottom > top ? { x: left, y: top, width: right - left, height: bottom - top } : null;
+    } finally { c.width = 0; }
   }
   async merge(layers: Layer[]): Promise<{ blob: Blob; bitmap: ImageBitmap; x: number; y: number }> {
     if (layers.length < 2) throw new Error('至少需要两个可见图层');
